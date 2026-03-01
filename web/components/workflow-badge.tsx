@@ -1,13 +1,15 @@
-import { Badge } from "@/components/ui/badge";
+import { CheckCircle2, Circle } from "lucide-react";
 
 export function WorkflowBadge({ hasWorkflow }: { hasWorkflow: boolean }) {
   return hasWorkflow ? (
-    <Badge variant="secondary" className="bg-green-100 text-green-700 hover:bg-green-100">
-      Ready
-    </Badge>
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-400 ring-1 ring-emerald-500/20">
+      <CheckCircle2 className="h-3 w-3" />
+      Active
+    </span>
   ) : (
-    <Badge variant="secondary" className="bg-zinc-100 text-zinc-500 hover:bg-zinc-100">
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground ring-1 ring-white/[0.06]">
+      <Circle className="h-3 w-3" />
       Draft
-    </Badge>
+    </span>
   );
 }
