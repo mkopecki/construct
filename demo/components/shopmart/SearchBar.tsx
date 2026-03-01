@@ -13,7 +13,7 @@ export default function ShopMartSearchBar() {
     const timeout = setTimeout(() => {
       const params = new URLSearchParams();
       if (query) params.set("q", query);
-      router.replace(`/shopmart${params.toString() ? `?${params}` : ""}`);
+      router.replace(`/shopmart/search${params.toString() ? `?${params}` : ""}`);
     }, 200);
     return () => clearTimeout(timeout);
   }, [query, router]);

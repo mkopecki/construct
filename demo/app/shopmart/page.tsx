@@ -1,35 +1,9 @@
-import { Suspense } from "react";
-import { searchProducts, getProducts } from "@/lib/products";
+import Link from "next/link";
+import { getProducts } from "@/lib/products";
 import ProductCard from "@/components/shopmart/ProductCard";
-import ShopMartSearchBar from "@/components/shopmart/SearchBar";
 
-function ProductGrid({ query }: { query: string }) {
-  const products = query ? searchProducts(query) : getProducts();
-
-  return (
-    <>
-      {products.length === 0 ? (
-        <div className="col-span-full flex flex-col items-center justify-center py-20">
-          <p className="text-lg font-medium text-[#64748b]">No products found</p>
-          <p className="text-sm text-[#94a3b8] mt-1">Try a different search term</p>
-        </div>
-      ) : (
-        <div className="product-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {products.map((product) => (
-            <ProductCard key={product.id} product={product} />
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-export default async function ShopMartPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ q?: string }>;
-}) {
-  const { q = "" } = await searchParams;
+export default function ShopMartPage() {
+  const products = getProducts();
 
   return (
     <>
@@ -44,9 +18,25 @@ export default async function ShopMartPage({
               Shop<span className="text-[#2563eb]">Mart</span>
             </span>
           </div>
-          <Suspense>
-            <ShopMartSearchBar />
-          </Suspense>
+          <Link
+            href="/shopmart/search"
+            className="search-trigger flex items-center gap-2 rounded-lg border border-[#e2e8f0] bg-white px-4 py-2 text-sm text-[#94a3b8] transition-all hover:border-[#cbd5e1] hover:text-[#64748b] hover:shadow-sm"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            Search products...
+          </Link>
         </div>
       </nav>
 
@@ -54,14 +44,18 @@ export default async function ShopMartPage({
       <main className="mx-auto max-w-6xl px-6 py-8">
         <div className="mb-8">
           <h1 className="font-[family-name:var(--font-instrument)] text-3xl text-[#0f172a]">
-            {q ? `Results for "${q}"` : "All Products"}
+            All Products
           </h1>
           <p className="mt-1 text-sm text-[#94a3b8]">
             Discover quality products at great prices
           </p>
         </div>
 
-        <ProductGrid query={q} />
+        <div className="product-grid grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {products.map((product) => (
+            <ProductCard key={product.id} product={product} />
+          ))}
+        </div>
       </main>
     </>
   );
