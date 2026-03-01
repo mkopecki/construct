@@ -50,6 +50,30 @@ if (!window.__constructRecorderInjected) {
     return null;
   }
 
+  const interactiveTags = new Set([
+    "a", "button", "input", "select", "textarea", "summary", "option",
+  ]);
+  const interactiveRoles = new Set([
+    "button", "link", "menuitem", "tab", "checkbox", "radio",
+    "switch", "option", "combobox", "textbox",
+  ]);
+
+  function findInteractiveAncestor(el: Element): Element {
+    let node: Element | null = el;
+    while (node && node !== document.documentElement) {
+      if (
+        interactiveTags.has(node.tagName.toLowerCase()) ||
+        interactiveRoles.has(node.getAttribute("role") ?? "") ||
+        node.hasAttribute("onclick") ||
+        (node instanceof HTMLElement && node.tabIndex >= 0 && node.tagName.toLowerCase() !== "div")
+      ) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+    return el;
+  }
+
   // Click listener (capture phase)
   document.addEventListener(
     "click",
@@ -58,9 +82,10 @@ if (!window.__constructRecorderInjected) {
       if (now === lastClickTimestamp) return;
       lastClickTimestamp = now;
 
-      const target = e.composedPath()[0];
-      if (!(target instanceof Element)) return;
+      const raw = e.composedPath()[0];
+      if (!(raw instanceof Element)) return;
 
+      const target = findInteractiveAncestor(raw);
       const { text, tag, role, ariaLabel } = describeElement(target);
 
       chrome.runtime.sendMessage({
@@ -79,17 +104,74 @@ if (!window.__constructRecorderInjected) {
     true
   );
 
-  // Change listener (capture phase)
+  const skipInputTypes = new Set([
+    "hidden", "checkbox", "radio", "file", "submit", "reset", "button", "image",
+  ]);
+
+  // Track debounce timers and last-sent values per element to avoid duplicates
+  const inputTimers = new WeakMap<Element, ReturnType<typeof setTimeout>>();
+  const lastSentValues = new WeakMap<Element, string>();
+
+  // Bug 6: Track elements with pending debounce timers for flush on navigation
+  const pendingInputElements = new Set<HTMLInputElement | HTMLTextAreaElement>();
+
+  function sendInputEvent(el: HTMLInputElement | HTMLTextAreaElement) {
+    const inputType = (el.getAttribute("type") || "text").toLowerCase();
+    if (skipInputTypes.has(inputType)) return;
+
+    const isPassword = inputType === "password";
+    const value = isPassword ? "[REDACTED]" : el.value;
+
+    // Skip if value hasn't changed since last send
+    if (lastSentValues.get(el) === value) return;
+    lastSentValues.set(el, value);
+
+    chrome.runtime.sendMessage({
+      type: "RECORD_EVENT",
+      event: {
+        type: "input",
+        fieldLabel: getFieldLabel(el),
+        value,
+        pageUrl: location.href,
+        timestamp: Date.now(),
+      },
+    });
+  }
+
+  // Debounced input listener — captures typing in real time
+  document.addEventListener(
+    "input",
+    (e: Event) => {
+      const target = e.target;
+      if (
+        !(target instanceof HTMLInputElement) &&
+        !(target instanceof HTMLTextAreaElement)
+      ) return;
+
+      const prev = inputTimers.get(target);
+      if (prev) clearTimeout(prev);
+
+      pendingInputElements.add(target);
+      inputTimers.set(
+        target,
+        setTimeout(() => {
+          pendingInputElements.delete(target);
+          sendInputEvent(target);
+        }, 500)
+      );
+    },
+    true
+  );
+
+  // Change listener — fires on blur, catches anything the debounce missed
+  // Also handles <select> elements
   document.addEventListener(
     "change",
     (e: Event) => {
       const target = e.target;
       if (!(target instanceof Element)) return;
 
-      const now = Date.now();
-      const tag = target.tagName.toLowerCase();
-
-      if (tag === "select" && target instanceof HTMLSelectElement) {
+      if (target instanceof HTMLSelectElement) {
         const selectedOption = target.options[target.selectedIndex];
         chrome.runtime.sendMessage({
           type: "RECORD_EVENT",
@@ -98,7 +180,7 @@ if (!window.__constructRecorderInjected) {
             fieldLabel: getFieldLabel(target),
             optionText: selectedOption?.textContent?.trim() || null,
             pageUrl: location.href,
-            timestamp: now,
+            timestamp: Date.now(),
           },
         });
         return;
@@ -108,25 +190,59 @@ if (!window.__constructRecorderInjected) {
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement
       ) {
-        const inputType = (target.getAttribute("type") || "text").toLowerCase();
-        const skip = ["hidden", "checkbox", "radio", "file", "submit", "reset", "button", "image"];
-        if (skip.includes(inputType)) return;
-
-        const isPassword = inputType === "password";
-        chrome.runtime.sendMessage({
-          type: "RECORD_EVENT",
-          event: {
-            type: "input",
-            fieldLabel: getFieldLabel(target),
-            value: isPassword ? "[REDACTED]" : target.value,
-            pageUrl: location.href,
-            timestamp: now,
-          },
-        });
+        // Clear any pending debounce and send immediately
+        const pending = inputTimers.get(target);
+        if (pending) clearTimeout(pending);
+        pendingInputElements.delete(target);
+        sendInputEvent(target);
       }
     },
     true
   );
+
+  // Bug 6: Flush all pending input timers before the page unloads
+  window.addEventListener("beforeunload", () => {
+    for (const el of pendingInputElements) {
+      const timer = inputTimers.get(el);
+      if (timer) clearTimeout(timer);
+      sendInputEvent(el);
+    }
+    pendingInputElements.clear();
+  });
+
+  // ── Bug 2: SPA navigation detection ─────────────────────────────────
+  let lastRecordedUrl = location.href;
+
+  function recordSpaNavigation() {
+    const currentUrl = location.href;
+    if (currentUrl === lastRecordedUrl) return;
+    lastRecordedUrl = currentUrl;
+
+    chrome.runtime.sendMessage({
+      type: "RECORD_EVENT",
+      event: {
+        type: "navigate",
+        url: currentUrl,
+        timestamp: Date.now(),
+      },
+    });
+  }
+
+  const originalPushState = history.pushState.bind(history);
+  history.pushState = function (...args: Parameters<typeof history.pushState>) {
+    originalPushState(...args);
+    recordSpaNavigation();
+  };
+
+  const originalReplaceState = history.replaceState.bind(history);
+  history.replaceState = function (...args: Parameters<typeof history.replaceState>) {
+    originalReplaceState(...args);
+    recordSpaNavigation();
+  };
+
+  window.addEventListener("popstate", () => {
+    recordSpaNavigation();
+  });
 }
 
 export {};

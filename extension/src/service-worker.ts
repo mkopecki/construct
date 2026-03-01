@@ -1,66 +1,112 @@
 import { BACKEND_URL, WEB_UI_URL } from "./config";
 import type { RecordedEvent, RecordingState } from "./types";
 
-const DEFAULT_STATE: RecordingState = {
-  isRecording: false,
-  tabId: null,
-  events: [],
-  startUrl: null,
-};
+// ── In-memory state (synchronous push — no storage race) ──────────────
+let inMemoryEvents: RecordedEvent[] = [];
+let inMemoryIsRecording = false;
+let inMemoryTabId: number | null = null;
+let inMemoryStartUrl: string | null = null;
 
-async function getState(): Promise<RecordingState> {
-  const result = await chrome.storage.session.get("recordingState");
-  return (result.recordingState as RecordingState) ?? { ...DEFAULT_STATE };
+// ── Debounced persistence to storage (backup for worker restart) ──────
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function persistEventsToStorage() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    const snapshot: RecordingState = {
+      isRecording: inMemoryIsRecording,
+      tabId: inMemoryTabId,
+      events: [...inMemoryEvents],
+      startUrl: inMemoryStartUrl,
+    };
+    chrome.storage.session.set({ recordingState: snapshot });
+  }, 1_000);
 }
 
-async function setState(state: RecordingState): Promise<void> {
-  await chrome.storage.session.set({ recordingState: state });
+function persistEventsToStorageSync() {
+  if (persistTimer) clearTimeout(persistTimer);
+  const snapshot: RecordingState = {
+    isRecording: inMemoryIsRecording,
+    tabId: inMemoryTabId,
+    events: [...inMemoryEvents],
+    startUrl: inMemoryStartUrl,
+  };
+  chrome.storage.session.set({ recordingState: snapshot });
 }
+
+// ── Hydrate from storage on worker startup (handles restart mid-recording) ──
+chrome.storage.session.get("recordingState").then((result) => {
+  const stored = result.recordingState as RecordingState | undefined;
+  if (stored?.isRecording) {
+    inMemoryIsRecording = stored.isRecording;
+    inMemoryTabId = stored.tabId;
+    inMemoryEvents = stored.events ?? [];
+    inMemoryStartUrl = stored.startUrl;
+    // Re-attach nav listeners since we're mid-recording
+    chrome.webNavigation.onCommitted.addListener(onNavCommitted);
+    chrome.webNavigation.onCompleted.addListener(onNavCompleted);
+    console.log("[construct] Hydrated mid-recording state from storage", {
+      eventCount: inMemoryEvents.length,
+    });
+  }
+});
+
+// ── Content-script injection with retry (Bug 3) ──────────────────────
+const INJECT_DELAYS = [0, 100, 500, 1500];
 
 async function injectContentScript(tabId: number): Promise<void> {
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["content-script.js"],
-    });
-  } catch (err) {
-    console.warn("[construct] Failed to inject content script:", err);
+  for (let attempt = 0; attempt < INJECT_DELAYS.length; attempt++) {
+    const delay = INJECT_DELAYS[attempt];
+    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["content-script.js"],
+      });
+      return; // success
+    } catch (err) {
+      console.warn(
+        `[construct] Content-script inject attempt ${attempt + 1}/${INJECT_DELAYS.length} failed:`,
+        err
+      );
+    }
   }
+  console.error(
+    `[construct] Failed to inject content script after ${INJECT_DELAYS.length} attempts`
+  );
 }
 
-// Navigation listener callbacks
+// ── Navigation listener callbacks ─────────────────────────────────────
 function onNavCommitted(
   details: chrome.webNavigation.WebNavigationTransitionCallbackDetails
 ) {
   if (details.frameId !== 0) return;
 
-  const validTransitions = ["typed", "auto_bookmark", "generated"];
-  if (!validTransitions.includes(details.transitionType)) return;
+  const ignoredTransitions = ["reload", "auto_subframe", "manual_subframe"];
+  if (ignoredTransitions.includes(details.transitionType)) return;
 
-  getState().then((state) => {
-    if (!state.isRecording || state.tabId !== details.tabId) return;
+  if (!inMemoryIsRecording || inMemoryTabId !== details.tabId) return;
 
-    const event: RecordedEvent = {
-      type: "navigate",
-      url: details.url,
-      timestamp: Date.now(),
-    };
-    state.events.push(event);
-    setState(state);
-  });
+  const event: RecordedEvent = {
+    type: "navigate",
+    url: details.url,
+    timestamp: Date.now(),
+  };
+  inMemoryEvents.push(event);
+  persistEventsToStorage();
 }
 
 function onNavCompleted(
   details: chrome.webNavigation.WebNavigationFramedCallbackDetails
 ) {
   if (details.frameId !== 0) return;
+  if (!inMemoryIsRecording || inMemoryTabId !== details.tabId) return;
 
-  getState().then((state) => {
-    if (!state.isRecording || state.tabId !== details.tabId) return;
-    injectContentScript(details.tabId);
-  });
+  injectContentScript(details.tabId);
 }
 
+// ── Start / Stop ──────────────────────────────────────────────────────
 async function startRecording(): Promise<{ success: boolean }> {
   const [tab] = await chrome.tabs.query({
     active: true,
@@ -68,13 +114,13 @@ async function startRecording(): Promise<{ success: boolean }> {
   });
   if (!tab?.id || !tab.url) return { success: false };
 
-  const state: RecordingState = {
-    isRecording: true,
-    tabId: tab.id,
-    events: [],
-    startUrl: tab.url,
-  };
-  await setState(state);
+  inMemoryIsRecording = true;
+  inMemoryTabId = tab.id;
+  inMemoryStartUrl = tab.url;
+  inMemoryEvents = [
+    { type: "navigate", url: tab.url, timestamp: Date.now() },
+  ];
+  persistEventsToStorageSync();
 
   await injectContentScript(tab.id);
 
@@ -84,16 +130,25 @@ async function startRecording(): Promise<{ success: boolean }> {
   return { success: true };
 }
 
-async function stopRecording(): Promise<{ success: boolean; recordingId?: string; error?: string }> {
-  const state = await getState();
-
+async function stopRecording(): Promise<{
+  success: boolean;
+  recordingId?: string;
+  error?: string;
+}> {
   chrome.webNavigation.onCommitted.removeListener(onNavCommitted);
   chrome.webNavigation.onCompleted.removeListener(onNavCompleted);
 
-  const events = state.events;
-  const startUrl = state.startUrl ?? "";
+  const events = [...inMemoryEvents];
+  const startUrl = inMemoryStartUrl ?? "";
 
   console.log("[construct] Recording payload:", { startUrl, events });
+
+  // Reset in-memory state immediately
+  inMemoryIsRecording = false;
+  inMemoryTabId = null;
+  inMemoryEvents = [];
+  inMemoryStartUrl = null;
+  persistEventsToStorageSync();
 
   try {
     const res = await fetch(`${BACKEND_URL}/api/recordings`, {
@@ -116,7 +171,6 @@ async function stopRecording(): Promise<{ success: boolean; recordingId?: string
     const sopUrl = `${WEB_UI_URL}/sops/${recordingId}`;
     chrome.tabs.create({ url: sopUrl });
 
-    await setState({ ...DEFAULT_STATE });
     return { success: true, recordingId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -134,36 +188,32 @@ async function stopRecording(): Promise<{ success: boolean; recordingId?: string
       },
     });
 
-    await setState({ ...DEFAULT_STATE });
     return { success: false, error: message };
   }
 }
 
-// Message handler
+// ── Message handler ───────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handle = async () => {
     switch (message.type) {
       case "START_RECORDING": {
-        const result = await startRecording();
-        return result;
+        return await startRecording();
       }
       case "STOP_RECORDING": {
         return await stopRecording();
       }
       case "RECORD_EVENT": {
-        const state = await getState();
-        if (!state.isRecording) return;
-        if (sender.tab?.id !== state.tabId) return;
+        if (!inMemoryIsRecording) return;
+        if (sender.tab?.id !== inMemoryTabId) return;
 
-        state.events.push(message.event as RecordedEvent);
-        await setState(state);
+        inMemoryEvents.push(message.event as RecordedEvent);
+        persistEventsToStorage();
         return { success: true };
       }
       case "GET_STATE": {
-        const state = await getState();
         return {
-          isRecording: state.isRecording,
-          eventCount: state.events.length,
+          isRecording: inMemoryIsRecording,
+          eventCount: inMemoryEvents.length,
         };
       }
     }
