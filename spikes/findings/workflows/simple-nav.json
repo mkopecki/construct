@@ -1,0 +1,25 @@
+{
+  "name": "Navigate to https://example.com and extract the page title and the first paragraph of text",
+  "description": "Workflow for: Navigate to https://example.com and extract the page title and the first paragraph of text",
+  "version": "1.0.0",
+  "default_wait_time": 0.1,
+  "steps": [
+    {
+      "wait_time": 0.0,
+      "type": "navigation",
+      "url": "https://example.com",
+      "agent_reasoning": "Start"
+    },
+    {
+      "wait_time": 5.36,
+      "type": "extract_page_content",
+      "goal": "title"
+    },
+    {
+      "wait_time": 5.36,
+      "type": "extract_page_content",
+      "goal": "This domain is for use in documentation examples without needing permission. Avoid use in operations."
+    }
+  ],
+  "input_schema": []
+}

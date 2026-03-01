@@ -1,0 +1,103 @@
+{
+  "name": "Go to https://www.google.com, type 'browser automation' into the search box, press Enter, and extract the title and URL of the first search result",
+  "description": "Workflow for: Go to https://www.google.com, type 'browser automation' into the search box, press Enter, and extract the title and URL of the first search result",
+  "version": "1.0.0",
+  "default_wait_time": 0.1,
+  "steps": [
+    {
+      "type": "navigation",
+      "url": "https://www.google.com",
+      "agent_reasoning": "Start"
+    },
+    {
+      "wait_time": 4.39,
+      "elementHash": "11380b7852",
+      "selectorStrategies": [
+        {
+          "type": "text_exact",
+          "value": "Search",
+          "priority": 1,
+          "metadata": {
+            "tag": "textarea"
+          }
+        },
+        {
+          "type": "role_text",
+          "value": "Search",
+          "priority": 2,
+          "metadata": {
+            "role": "combobox",
+            "tag": "textarea"
+          }
+        }
+      ],
+      "target_text": "Search",
+      "type": "input",
+      "value": "browser automation",
+      "agent_reasoning": "Currently on the Google homepage, ready to input the search term. No previous actions have been taken yet.",
+      "page_context_url": "https://www.google.com/"
+    },
+    {
+      "wait_time": 4.39,
+      "elementHash": "13addcf082",
+      "selectorStrategies": [
+        {
+          "type": "text_exact",
+          "value": "Google Search",
+          "priority": 1,
+          "metadata": {
+            "tag": "input"
+          }
+        },
+        {
+          "type": "role_text",
+          "value": "Google Search",
+          "priority": 2,
+          "metadata": {
+            "role": "button",
+            "tag": "input"
+          }
+        }
+      ],
+      "target_text": "Google Search",
+      "type": "click",
+      "agent_reasoning": "Currently on the Google homepage, ready to input the search term. No previous actions have been taken yet.",
+      "page_context_url": "https://www.google.com/",
+      "page_context_title": "Google"
+    },
+    {
+      "wait_time": 4.46,
+      "elementHash": "11ec904cb3",
+      "selectorStrategies": [
+        {
+          "type": "text_exact",
+          "value": "Search",
+          "priority": 1,
+          "metadata": {
+            "tag": "button"
+          }
+        },
+        {
+          "type": "role_text",
+          "value": "Search",
+          "priority": 2,
+          "metadata": {
+            "role": "button",
+            "tag": "button"
+          }
+        }
+      ],
+      "target_text": "Search",
+      "type": "click",
+      "agent_reasoning": "Currently on the Google search results page for 'browser automation'. Next, I will submit the search to extract results.",
+      "page_context_url": "https://www.google.com/search?q=browser+automation&sca_esv=606e4c2efeacdd80&source=hp&ei=q4ajaYKKA5fY0PEP6KHZ4AU&iflsig=AFdpzrgAAAAAaaOUuz1AYRs26p-aCx1FnnHkj-13IKrK&ved=0ahUKEwjCi_6st_2SAxUXLDQIHehQFlwQ4dUDCBk&oq=browser+automation&gs_lp=Egdnd3Mtd2l6IhJicm93c2VyIGF1dG9tYXRpb24yBRAAGIAEMgUQABiABDIFEAAYgAQyBRAAGIAEMgUQABiABDIFEAAYgAQyBRAAGIAEMgUQABiABDIFEAAYgAQyBRAAGIAESKUGUABYuwFwAHgAkAEAmAF4oAH7BKoBAzQuNLgBDMgBAPgBAZgCCKACjgXCAg4QLhiABBiKBRixAxiDAcICCxAAGIAEGLEDGIMBwgIOEC4YgAQYsQMYxwEY0QPCAhEQLhiABBixAxiDARjHARjRA8ICDhAAGIAEGIoFGLEDGIMBwgIIEAAYgAQYsQPCAhEQLhiDARjHARixAxjRAxiABMICCxAuGIAEGLEDGIMBwgIFEC4YgATCAggQLhiABBixA8ICCxAuGIAEGLEDGMkDwgIIEC4YsQMYgATCAgQQABgDwgILEAAYgAQYigUYkgOYAwCSBwM0LjSgB_5LsgcDNC40uAeOBcIHBTAuNy4xyAcOgAgB&sclient=gws-wiz&sei=uIajad6GHMGl0PEPhISU8Ac",
+      "page_context_title": "browser automation - Google Search"
+    },
+    {
+      "wait_time": 5.53,
+      "type": "extract_page_content",
+      "goal": "First search result title and URL"
+    }
+  ],
+  "input_schema": []
+}

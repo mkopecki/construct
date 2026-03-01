@@ -1,0 +1,19 @@
+{
+  "name": "Go to https://news.ycombinator.com, extract the title and URL of the top story on the page",
+  "description": "Workflow for: Go to https://news.ycombinator.com, extract the title and URL of the top story on the page",
+  "version": "1.0.0",
+  "default_wait_time": 0.1,
+  "steps": [
+    {
+      "type": "navigation",
+      "url": "https://news.ycombinator.com",
+      "agent_reasoning": "Start"
+    },
+    {
+      "wait_time": 6.86,
+      "type": "extract_page_content",
+      "goal": "title and URL of the top story"
+    }
+  ],
+  "input_schema": []
+}
