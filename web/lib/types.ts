@@ -30,7 +30,9 @@ export interface SOPDetail {
   steps: StepDef[];
   variables: Variable[];
   output_schema: OutputField[];
-  workflow_json: Record<string, unknown> | null;
+  workspace_id: string | null;
+  workflow_md: string | null;
+  data_target: DataTarget | null;
   created_at: string;
   updated_at: string;
 }
@@ -60,6 +62,15 @@ export interface OutputField {
   example: string;
 }
 
+// ── Data Targets ──
+
+export type DataTargetType = "discord_webhook" | "slack" | "email" | "http_webhook";
+
+export interface DataTarget {
+  type: DataTargetType;
+  enabled: boolean;
+}
+
 // ── Runs ──
 
 export interface RunSummary {
@@ -68,6 +79,7 @@ export interface RunSummary {
   status: RunStatus;
   current_step: number;
   total_steps: number;
+  live_url: string | null;
   started_at: string | null;
   finished_at: string | null;
 }
@@ -88,6 +100,9 @@ export interface RunDetail {
   step_results: StepResult[];
   output: Record<string, unknown> | null;
   error: string | null;
+  session_id: string | null;
+  live_url: string | null;
+  cost_usd: number | null;
   started_at: string | null;
   finished_at: string | null;
 }
@@ -108,7 +123,7 @@ export interface GenerationStepEvent {
 
 export interface GenerationCompleteEvent {
   type: "complete";
-  workflow: Record<string, unknown>;
+  workspace_id: string;
 }
 
 export interface GenerationErrorEvent {
@@ -125,7 +140,12 @@ export type GenerationEvent =
 export interface RunStartedEvent {
   type: "run_started";
   run_id: string;
-  total_steps: number;
+  live_url?: string;
+}
+
+export interface RunStatusEvent {
+  type: "status";
+  message: string;
 }
 
 export interface RunStepStartEvent {
@@ -160,6 +180,7 @@ export interface RunErrorEvent {
 
 export type RunEvent =
   | RunStartedEvent
+  | RunStatusEvent
   | RunStepStartEvent
   | RunStepCompleteEvent
   | RunCompleteEvent

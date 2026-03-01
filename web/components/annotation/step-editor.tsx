@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowUp, ArrowDown, Trash2, Plus } from "lucide-react";
+import { GripVertical, Trash2, Plus } from "lucide-react";
 import type { StepDef } from "@/lib/types";
 
 interface StepEditorProps {
@@ -38,35 +38,41 @@ export function StepEditor({ steps, onChange }: StepEditorProps) {
   };
 
   return (
-    <div className="space-y-2">
-      <label className="text-sm font-medium">Steps</label>
+    <div className="space-y-3">
+      <label className="text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">Steps</label>
       {steps.map((step, i) => (
-        <div key={step.id} className="flex items-center gap-2">
-          <span className="w-6 text-center text-xs text-muted-foreground">{i + 1}</span>
+        <div key={step.id} className="group flex items-center gap-2">
+          <button
+            className="cursor-grab text-muted-foreground/30 hover:text-muted-foreground/60 transition-colors"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => move(i, i > 0 ? -1 : 1)}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+          <span className="w-6 text-center text-[11px] font-mono text-muted-foreground/30">{i + 1}</span>
           <Input
             value={step.description}
             onChange={(e) => update(i, e.target.value)}
             placeholder="Describe this step..."
-            className="flex-1"
+            className="flex-1 bg-secondary border-white/[0.06] focus:border-amber/30"
           />
-          <Button variant="ghost" size="icon" onClick={() => move(i, -1)} disabled={i === 0}>
-            <ArrowUp className="h-4 w-4" />
-          </Button>
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => move(i, 1)}
-            disabled={i === steps.length - 1}
+            onClick={() => remove(i)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/40 hover:text-red-400"
           >
-            <ArrowDown className="h-4 w-4" />
-          </Button>
-          <Button variant="ghost" size="icon" onClick={() => remove(i)}>
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       ))}
-      <Button variant="outline" size="sm" onClick={add}>
-        <Plus className="mr-1 h-4 w-4" />
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={add}
+        className="border-dashed border-white/[0.06] text-muted-foreground hover:text-foreground hover:border-white/[0.12]"
+      >
+        <Plus className="mr-1.5 h-3.5 w-3.5" />
         Add step
       </Button>
     </div>

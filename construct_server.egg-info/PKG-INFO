@@ -7,10 +7,6 @@ Requires-Dist: fastapi>=0.115.0
 Requires-Dist: uvicorn[standard]>=0.32.0
 Requires-Dist: aiosqlite>=0.20.0
 Requires-Dist: python-dotenv>=1.0.0
-Requires-Dist: workflow-use
-Requires-Dist: browser-use
-Requires-Dist: openai>=1.0.0
-Requires-Dist: langchain-openai>=0.3.0
-Requires-Dist: playwright>=1.40.0
+Requires-Dist: httpx>=0.27.0
 Requires-Dist: fastmcp>=2.0.0
 Requires-Dist: pydantic>=2.0.0

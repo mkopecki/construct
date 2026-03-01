@@ -4,14 +4,11 @@ import { useState, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { StepProgress } from "@/components/step-progress";
-import { SSELogPanel } from "@/components/sse-log-panel";
-import { KeyValueTable } from "@/components/key-value-table";
 import { streamRun } from "@/lib/sse";
 import { api } from "@/lib/api";
 import type { Variable, RunEvent } from "@/lib/types";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, Square } from "lucide-react";
+import { Play, Square, ExternalLink, Loader2, CheckCircle2, XCircle } from "lucide-react";
 
 interface RunFormProps {
   sopId: string;
@@ -27,23 +24,23 @@ export function RunForm({ sopId, variables }: RunFormProps) {
   });
 
   const [running, setRunning] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [totalSteps, setTotalSteps] = useState(0);
-  const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
-  const [failedStep, setFailedStep] = useState<number | undefined>();
+  const [status, setStatus] = useState<string | null>(null);
+  const [stepProgress, setStepProgress] = useState<{ current: number; total: number } | null>(null);
+  const [liveUrl, setLiveUrl] = useState<string | null>(null);
   const [output, setOutput] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const runIdRef = useRef<string | null>(null);
 
   const handleRun = useCallback(async () => {
     setRunning(true);
-    setLogs([]);
-    setCurrentStep(0);
-    setTotalSteps(0);
-    setCompletedSteps(new Set());
-    setFailedStep(undefined);
+    setStatus("Starting...");
+    setStepProgress(null);
+    setLiveUrl(null);
     setOutput(null);
+    setError(null);
+    setDone(false);
     runIdRef.current = null;
 
     const ac = new AbortController();
@@ -54,33 +51,35 @@ export function RunForm({ sopId, variables }: RunFormProps) {
         switch (event.type) {
           case "run_started":
             runIdRef.current = event.run_id;
-            setTotalSteps(event.total_steps);
-            setLogs((l) => [...l, `Run started (${event.total_steps} steps)`]);
+            if (event.live_url) setLiveUrl(event.live_url);
+            setStatus("Session created");
+            break;
+          case "status":
+            setStatus(event.message);
             break;
           case "step_start":
-            setCurrentStep(event.step);
-            setLogs((l) => [...l, `Step ${event.step}/${event.total} starting...`]);
+            setStepProgress({ current: event.step, total: event.total });
+            setStatus(`Step ${event.step} of ${event.total}`);
             break;
           case "step_complete":
-            setCompletedSteps((s) => new Set(s).add(event.step));
-            setLogs((l) => [...l, `Step ${event.step}/${event.total} complete`]);
+            setStepProgress({ current: event.step, total: event.total });
             break;
           case "complete":
             setOutput(event.output ?? null);
-            setLogs((l) => [...l, "Run completed successfully"]);
+            setStatus("Completed");
+            setDone(true);
             break;
           case "cancelled":
-            setLogs((l) => [...l, `Run cancelled at step ${event.step}`]);
+            setStatus(`Cancelled at step ${event.step}`);
             break;
           case "error":
-            if (event.step) setFailedStep(event.step);
-            setLogs((l) => [...l, `Error: ${event.message}`]);
+            setError(event.message);
             break;
         }
       }, ac.signal);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
-        setLogs((l) => [...l, `Error: ${(e as Error).message}`]);
+        setError((e as Error).message);
       }
     } finally {
       setRunning(false);
@@ -91,30 +90,40 @@ export function RunForm({ sopId, variables }: RunFormProps) {
 
   const handleCancel = useCallback(async () => {
     if (runIdRef.current) {
-      try {
-        await api.cancelRun(runIdRef.current);
-      } catch {
-        // abort the stream directly as fallback
-        abortRef.current?.abort();
-      }
+      try { await api.cancelRun(runIdRef.current); } catch { abortRef.current?.abort(); }
     } else {
       abortRef.current?.abort();
     }
   }, []);
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-sm font-medium">Run Workflow</h3>
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">
+          Run Workflow
+        </h3>
+        {running && liveUrl && (
+          <a
+            href={liveUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-xs text-amber hover:text-amber/80 transition-colors"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Watch live
+          </a>
+        )}
+      </div>
 
       {variables.length > 0 && (
         <div className="space-y-3">
           {variables.map((v) => (
-            <div key={v.name} className="space-y-1">
-              <Label className="text-xs">
-                {v.name}
+            <div key={v.name} className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                <span className="font-mono text-amber/70">{v.name}</span>
                 {v.description && (
-                  <span className="ml-1 font-normal text-muted-foreground">
-                    — {v.description}
+                  <span className="ml-2 font-normal text-muted-foreground/50">
+                    {v.description}
                   </span>
                 )}
               </Label>
@@ -122,43 +131,90 @@ export function RunForm({ sopId, variables }: RunFormProps) {
                 value={params[v.name] ?? ""}
                 onChange={(e) => setParams((p) => ({ ...p, [v.name]: e.target.value }))}
                 placeholder={v.example || v.name}
+                className="bg-secondary border-white/[0.06] focus:border-amber/30"
               />
             </div>
           ))}
         </div>
       )}
 
-      <div className="flex gap-2">
-        <Button onClick={handleRun} disabled={running}>
-          <Play className="mr-1 h-4 w-4" />
-          Run
+      <div className="flex items-center gap-2">
+        <Button
+          onClick={handleRun}
+          disabled={running}
+          className="bg-amber text-amber-foreground hover:bg-amber/90"
+        >
+          {running ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <Play className="mr-2 h-4 w-4" />
+          )}
+          {running ? "Running..." : "Run"}
         </Button>
         {running && (
-          <Button variant="outline" onClick={handleCancel}>
-            <Square className="mr-1 h-4 w-4" />
+          <Button
+            variant="outline"
+            onClick={handleCancel}
+            className="border-white/[0.06]"
+          >
+            <Square className="mr-1.5 h-3.5 w-3.5" />
             Cancel
           </Button>
         )}
       </div>
 
-      {(logs.length > 0 || running) && (
-        <div className="space-y-3">
-          {totalSteps > 0 && (
-            <StepProgress
-              currentStep={currentStep}
-              totalSteps={totalSteps}
-              completedSteps={completedSteps}
-              failedStep={failedStep}
+      {/* Progress */}
+      {running && stepProgress && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">{status}</span>
+            <span className="font-mono text-muted-foreground/70">
+              {stepProgress.current}/{stepProgress.total}
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
+            <div
+              className="h-full rounded-full bg-amber progress-active transition-all duration-500"
+              style={{ width: `${(stepProgress.current / stepProgress.total) * 100}%` }}
             />
-          )}
-          <SSELogPanel logs={logs} streaming={running} />
+          </div>
         </div>
       )}
 
-      {output && (
-        <div className="space-y-2">
-          <h4 className="text-sm font-medium">Output</h4>
-          <KeyValueTable data={output} />
+      {running && !stepProgress && status && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin text-amber" />
+          {status}
+        </div>
+      )}
+
+      {/* Success */}
+      {done && (
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+          <div className="flex items-center gap-2 text-sm text-emerald-400">
+            <CheckCircle2 className="h-4 w-4" />
+            Run completed successfully
+          </div>
+          {output && Object.keys(output).length > 0 && (
+            <div className="space-y-1 pt-1">
+              {Object.entries(output).map(([k, v]) => (
+                <div key={k} className="flex gap-3 text-xs">
+                  <span className="font-mono text-muted-foreground min-w-[100px]">{k}</span>
+                  <span className="text-foreground/80">{typeof v === "object" ? JSON.stringify(v) : String(v ?? "")}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Error */}
+      {error && !running && (
+        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4">
+          <div className="flex items-center gap-2 text-sm text-red-400">
+            <XCircle className="h-4 w-4" />
+            {error}
+          </div>
         </div>
       )}
     </div>

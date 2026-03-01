@@ -27,6 +27,7 @@ async def list_workflows() -> list[dict[str, Any]]:
             "description": s["description"],
             "variables": full["variables"],
             "output_schema": full["output_schema"],
+            "workspace_id": full["workspace_id"],
         })
     return results
 

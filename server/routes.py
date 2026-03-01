@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from server.models import (
     CreateRecordingRequest,
     RecordingResponse,
+    SetDataTargetRequest,
     StartRunRequest,
     UpdateSOPRequest,
 )
@@ -46,6 +47,16 @@ async def update_sop(sop_id: str, req: UpdateSOPRequest):
 async def delete_sop(sop_id: str):
     deleted = await service.delete_sop(sop_id)
     if not deleted:
+        raise HTTPException(404, "SOP not found")
+    return {"ok": True}
+
+
+@router.put("/sops/{sop_id}/data-target")
+async def set_data_target(sop_id: str, req: SetDataTargetRequest):
+    updated = await service.set_data_target(
+        sop_id, req.data_target.model_dump() if req.data_target else None
+    )
+    if not updated:
         raise HTTPException(404, "SOP not found")
     return {"ok": True}
 

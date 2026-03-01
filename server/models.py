@@ -25,6 +25,15 @@ class StartRunRequest(BaseModel):
     params: dict[str, Any] = {}
 
 
+class DataTarget(BaseModel):
+    type: str
+    enabled: bool = True
+
+
+class SetDataTargetRequest(BaseModel):
+    data_target: DataTarget | None = None
+
+
 # --- Response models ---
 
 class RecordingResponse(BaseModel):
@@ -48,7 +57,9 @@ class SOPDetail(BaseModel):
     steps: list[dict[str, Any]]
     variables: list[dict[str, Any]]
     output_schema: list[dict[str, Any]]
-    workflow_json: dict[str, Any] | None
+    workspace_id: str | None
+    workflow_md: str | None
+    data_target: dict[str, Any] | None
     created_at: str
     updated_at: str
 
@@ -59,6 +70,7 @@ class RunSummary(BaseModel):
     status: str
     current_step: int
     total_steps: int
+    live_url: str | None
     started_at: str | None
     finished_at: str | None
 
@@ -73,5 +85,8 @@ class RunDetail(BaseModel):
     step_results: list[dict[str, Any]]
     output: Any | None
     error: str | None
+    session_id: str | None
+    live_url: str | None
+    cost_usd: float | None
     started_at: str | None
     finished_at: str | None

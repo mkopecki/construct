@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
-from pydantic import create_model
+import httpx
 
 from server import config
+from server.browser_use import BrowserUseClient
 from server.db import get_db
-from server.prompt import build_generation_prompt
 from server.sse import sse_event
+from server.workflow_md import build_run_task_prompt, build_workflow_md
 
 
 class ConstructService:
+    def __init__(self) -> None:
+        self._bu = BrowserUseClient()
+
     # ---- SOP CRUD ----
 
     async def create_recording(self, start_url: str, events: list[dict[str, Any]]) -> str:
@@ -35,7 +40,7 @@ class ConstructService:
         db = await get_db()
         try:
             cursor = await db.execute(
-                "SELECT id, name, description, workflow_json, created_at, updated_at FROM sops ORDER BY created_at DESC"
+                "SELECT id, name, description, workspace_id, created_at, updated_at FROM sops ORDER BY created_at DESC"
             )
             rows = await cursor.fetchall()
             return [
@@ -43,7 +48,7 @@ class ConstructService:
                     "id": r["id"],
                     "name": r["name"],
                     "description": r["description"],
-                    "has_workflow": r["workflow_json"] is not None,
+                    "has_workflow": r["workspace_id"] is not None,
                     "created_at": r["created_at"],
                     "updated_at": r["updated_at"],
                 }
@@ -59,6 +64,7 @@ class ConstructService:
             row = await cursor.fetchone()
             if not row:
                 return None
+            raw_dt = row["data_target"]
             return {
                 "id": row["id"],
                 "name": row["name"],
@@ -67,7 +73,9 @@ class ConstructService:
                 "steps": json.loads(row["steps"]),
                 "variables": json.loads(row["variables"]),
                 "output_schema": json.loads(row["output_schema"]),
-                "workflow_json": json.loads(row["workflow_json"]) if row["workflow_json"] else None,
+                "workspace_id": row["workspace_id"],
+                "workflow_md": row["workflow_md"],
+                "data_target": json.loads(raw_dt) if raw_dt else None,
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
@@ -108,6 +116,19 @@ class ConstructService:
         finally:
             await db.close()
 
+    async def set_data_target(self, sop_id: str, data_target: dict[str, Any] | None) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "UPDATE sops SET data_target=?, updated_at=? WHERE id=?",
+                (json.dumps(data_target) if data_target else None, now, sop_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
     # ---- Workflow Generation (SSE) ----
 
     async def generate_workflow_stream(self, sop_id: str) -> AsyncGenerator[str, None]:
@@ -123,77 +144,44 @@ class ConstructService:
                 start_url = ev.get("url", "")
                 break
 
-        prompt = build_generation_prompt(
-            name=sop["name"],
-            description=sop["description"],
-            start_url=start_url,
-            steps=sop["steps"],
-            variables=sop["variables"],
-            output_schema=sop["output_schema"],
-        )
-
-        yield sse_event("status", message="Starting workflow generation...")
-
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-        def on_step_recorded(step_data: dict[str, Any]) -> None:
-            queue.put_nowait({"type": "step", **step_data})
-
-        def on_status_update(message: str) -> None:
-            queue.put_nowait({"type": "status", "message": message})
-
-        async def _generate() -> Any:
-            from browser_use.llm.openai.chat import ChatOpenAI
-
-            from workflow_use.healing.service import HealingService
-
-            llm = ChatOpenAI(model=config.OPENAI_MODEL, api_key=config.OPENAI_API_KEY)
-            service = HealingService(llm, use_deterministic_conversion=True)
-            result = await service.generate_workflow_from_prompt(
-                prompt=prompt,
-                agent_llm=llm,
-                extraction_llm=llm,
-                use_cloud=True,
-                on_step_recorded=on_step_recorded,
-                on_status_update=on_status_update,
-            )
-            return result
-
-        task = asyncio.create_task(_generate())
+        yield sse_event("status", message="Creating cloud workspace...")
 
         try:
-            while not task.done():
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
-                    yield sse_event(event.pop("type"), **event)
-                except asyncio.TimeoutError:
-                    continue
+            # 1. Create workspace
+            ws = await self._bu.create_workspace(sop["name"] or f"sop-{sop_id}")
+            workspace_id = ws["id"]
+            yield sse_event("status", message="Workspace created")
 
-            # Drain remaining events
-            while not queue.empty():
-                event = await asyncio.wait_for(queue.get(), timeout=0.1)
-                yield sse_event(event.pop("type"), **event)
+            # 2. Build workflow.md
+            workflow_md = build_workflow_md(
+                name=sop["name"],
+                description=sop["description"],
+                start_url=start_url,
+                steps=sop["steps"],
+                variables=sop["variables"],
+                output_schema=sop["output_schema"],
+            )
+            yield sse_event("status", message="Workflow document built")
 
-            workflow_schema = await task
-            workflow_dict = workflow_schema.model_dump()
+            # 3. Upload workflow.md to workspace
+            await self._bu.upload_file(workspace_id, "workflow.md", workflow_md)
+            yield sse_event("status", message="Uploaded workflow.md to workspace")
 
-            # Save to DB
+            # 4. Save to DB
             now = datetime.now(timezone.utc).isoformat()
             db = await get_db()
             try:
                 await db.execute(
-                    "UPDATE sops SET workflow_json=?, updated_at=? WHERE id=?",
-                    (json.dumps(workflow_dict), now, sop_id),
+                    "UPDATE sops SET workspace_id=?, workflow_md=?, updated_at=? WHERE id=?",
+                    (workspace_id, workflow_md, now, sop_id),
                 )
                 await db.commit()
             finally:
                 await db.close()
 
-            yield sse_event("complete", workflow=workflow_dict)
+            yield sse_event("complete", workspace_id=workspace_id)
 
         except Exception as exc:
-            if not task.done():
-                task.cancel()
             yield sse_event("error", message=str(exc))
 
     # ---- Workflow Execution (SSE) ----
@@ -205,64 +193,77 @@ class ConstructService:
         if not sop:
             yield sse_event("error", message="SOP not found")
             return
-        if not sop["workflow_json"]:
+        if not sop["workspace_id"]:
             yield sse_event("error", message="No generated workflow — generate first")
             return
 
         run_id = uuid.uuid4().hex[:12]
         now = datetime.now(timezone.utc).isoformat()
-        workflow_data = sop["workflow_json"]
-        total_steps = len(workflow_data.get("steps", []))
 
         db = await get_db()
         try:
             await db.execute(
-                "INSERT INTO runs (id, sop_id, params, status, total_steps, started_at) VALUES (?,?,?,?,?,?)",
-                (run_id, sop_id, json.dumps(params), "running", total_steps, now),
+                "INSERT INTO runs (id, sop_id, params, status, started_at) VALUES (?,?,?,?,?)",
+                (run_id, sop_id, json.dumps(params), "running", now),
             )
             await db.commit()
         finally:
             await db.close()
 
-        yield sse_event("run_started", run_id=run_id, total_steps=total_steps)
-
-        cancel_event = asyncio.Event()
-        self._active_runs = getattr(self, "_active_runs", {})
-        self._active_runs[run_id] = cancel_event
-
         try:
-            from browser_use.llm.openai.chat import ChatOpenAI
+            # Build task prompt
+            task = build_run_task_prompt(params, sop["output_schema"])
 
-            from workflow_use.schema.views import WorkflowDefinitionSchema
-            from workflow_use.workflow.service import Workflow
-
-            llm = ChatOpenAI(model=config.OPENAI_MODEL, api_key=config.OPENAI_API_KEY)
-            schema = WorkflowDefinitionSchema(**workflow_data)
-
-            output_model = self._build_output_model(sop["output_schema"])
-            self._ensure_extraction_step(schema, sop["output_schema"])
-            self._convert_extraction_steps(schema)
-            total_steps = len(schema.steps)
-
-            workflow = Workflow(schema, llm, use_cloud=True)
-
-            yield sse_event("status", message="Executing workflow on cloud browser...")
-
-            result = await workflow.run_with_no_ai(
-                inputs=params,
-                output_model=output_model,
-                cancel_event=cancel_event,
-                close_browser_at_end=True,
+            # Create cloud session
+            session = await self._bu.create_session(
+                task=task, workspace_id=sop["workspace_id"]
             )
-            output = result.output_model.model_dump() if result.output_model else None
-            await self._finish_run(run_id, "passed", [], current_step=total_steps, output=output)
+            session_id = session["id"]
+            live_url = session.get("liveUrl")
+
+            # Save session info to run
+            db = await get_db()
+            try:
+                await db.execute(
+                    "UPDATE runs SET session_id=?, live_url=? WHERE id=?",
+                    (session_id, live_url, run_id),
+                )
+                await db.commit()
+            finally:
+                await db.close()
+
+            yield sse_event("run_started", run_id=run_id, live_url=live_url)
+
+            # Poll session until complete
+            output, cost = await self._poll_session(session_id, sop)
+
+            await self._finish_run(run_id, "passed", output=output, cost_usd=cost)
             yield sse_event("complete", run_id=run_id, output=output)
 
         except Exception as exc:
-            await self._finish_run(run_id, "failed", [], error=str(exc))
+            await self._finish_run(run_id, "failed", error=str(exc))
             yield sse_event("error", message=str(exc))
-        finally:
-            self._active_runs.pop(run_id, None)
+
+    async def _poll_session(
+        self,
+        session_id: str,
+        sop: dict[str, Any],
+    ) -> tuple[Any, float | None]:
+        """Poll BU Cloud session until it finishes. Returns (output, cost_usd)."""
+        while True:
+            await asyncio.sleep(2)
+            session = await self._bu.get_session(session_id)
+            status = session.get("status", "")
+
+            if status == "stopped":
+                raw = session.get("output", "") or ""
+                output = _parse_agent_output(raw, sop["output_schema"])
+                cost_str = session.get("totalCostUsd")
+                cost = float(cost_str) if cost_str else None
+                return output, cost
+            elif status in ("error", "timed_out"):
+                error = session.get("output") or f"Session {status}"
+                raise RuntimeError(error)
 
     # ---- Run management (for MCP) ----
 
@@ -271,60 +272,50 @@ class ConstructService:
         sop = await self.get_sop(sop_id)
         if not sop:
             raise ValueError("SOP not found")
-        if not sop["workflow_json"]:
+        if not sop["workspace_id"]:
             raise ValueError("No generated workflow")
 
         run_id = uuid.uuid4().hex[:12]
         now = datetime.now(timezone.utc).isoformat()
-        total_steps = len(sop["workflow_json"].get("steps", []))
 
         db = await get_db()
         try:
             await db.execute(
-                "INSERT INTO runs (id, sop_id, params, status, total_steps, started_at) VALUES (?,?,?,?,?,?)",
-                (run_id, sop_id, json.dumps(params), "running", total_steps, now),
+                "INSERT INTO runs (id, sop_id, params, status, started_at) VALUES (?,?,?,?,?)",
+                (run_id, sop_id, json.dumps(params), "running", now),
             )
             await db.commit()
         finally:
             await db.close()
 
-        cancel_event = asyncio.Event()
-        self._active_runs = getattr(self, "_active_runs", {})
-        self._active_runs[run_id] = cancel_event
-
-        asyncio.create_task(self._execute_run_background(run_id, sop, params, cancel_event))
+        asyncio.create_task(self._execute_run_background(run_id, sop, params))
         return run_id
 
     async def _execute_run_background(
-        self, run_id: str, sop: dict[str, Any], params: dict[str, Any], cancel_event: asyncio.Event
+        self, run_id: str, sop: dict[str, Any], params: dict[str, Any]
     ) -> None:
         try:
-            from browser_use.llm.openai.chat import ChatOpenAI
-
-            from workflow_use.schema.views import WorkflowDefinitionSchema
-            from workflow_use.workflow.service import Workflow
-
-            llm = ChatOpenAI(model=config.OPENAI_MODEL, api_key=config.OPENAI_API_KEY)
-            schema = WorkflowDefinitionSchema(**sop["workflow_json"])
-
-            output_model = self._build_output_model(sop["output_schema"])
-            self._ensure_extraction_step(schema, sop["output_schema"])
-            self._convert_extraction_steps(schema)
-
-            workflow = Workflow(schema, llm, use_cloud=True)
-
-            result = await workflow.run_with_no_ai(
-                inputs=params,
-                output_model=output_model,
-                cancel_event=cancel_event,
-                close_browser_at_end=True,
+            task = build_run_task_prompt(params, sop["output_schema"])
+            session = await self._bu.create_session(
+                task=task, workspace_id=sop["workspace_id"]
             )
-            output = result.output_model.model_dump() if result.output_model else None
-            await self._finish_run(run_id, "passed", [], current_step=len(schema.steps), output=output)
+            session_id = session["id"]
+            live_url = session.get("liveUrl")
+
+            db = await get_db()
+            try:
+                await db.execute(
+                    "UPDATE runs SET session_id=?, live_url=? WHERE id=?",
+                    (session_id, live_url, run_id),
+                )
+                await db.commit()
+            finally:
+                await db.close()
+
+            output, cost = await self._poll_session(session_id, sop)
+            await self._finish_run(run_id, "passed", output=output, cost_usd=cost)
         except Exception as exc:
-            await self._finish_run(run_id, "failed", [], error=str(exc))
-        finally:
-            self._active_runs.pop(run_id, None)
+            await self._finish_run(run_id, "failed", error=str(exc))
 
     async def get_run(self, run_id: str) -> dict[str, Any] | None:
         db = await get_db()
@@ -343,6 +334,9 @@ class ConstructService:
                 "step_results": json.loads(row["step_results"]),
                 "output": json.loads(row["output"]) if row["output"] else None,
                 "error": row["error"],
+                "session_id": row["session_id"],
+                "live_url": row["live_url"],
+                "cost_usd": row["cost_usd"],
                 "started_at": row["started_at"],
                 "finished_at": row["finished_at"],
             }
@@ -353,7 +347,7 @@ class ConstructService:
         db = await get_db()
         try:
             cursor = await db.execute(
-                "SELECT id, sop_id, status, current_step, total_steps, started_at, finished_at FROM runs WHERE sop_id=? ORDER BY started_at DESC",
+                "SELECT id, sop_id, status, current_step, total_steps, live_url, started_at, finished_at FROM runs WHERE sop_id=? ORDER BY started_at DESC",
                 (sop_id,),
             )
             rows = await cursor.fetchall()
@@ -364,6 +358,7 @@ class ConstructService:
                     "status": r["status"],
                     "current_step": r["current_step"],
                     "total_steps": r["total_steps"],
+                    "live_url": r["live_url"],
                     "started_at": r["started_at"],
                     "finished_at": r["finished_at"],
                 }
@@ -373,84 +368,170 @@ class ConstructService:
             await db.close()
 
     async def cancel_run(self, run_id: str) -> bool:
-        active = getattr(self, "_active_runs", {})
-        event = active.get(run_id)
-        if event:
-            event.set()
+        run = await self.get_run(run_id)
+        if not run or not run.get("session_id"):
+            return False
+        try:
+            await self._bu.stop_session(run["session_id"])
+            await self._finish_run(run_id, "cancelled")
             return True
-        return False
+        except Exception:
+            return False
 
     # ---- Helpers ----
-
-    async def _update_run_progress(
-        self, run_id: str, current_step: int, step_results: list[dict[str, Any]]
-    ) -> None:
-        db = await get_db()
-        try:
-            await db.execute(
-                "UPDATE runs SET current_step=?, step_results=? WHERE id=?",
-                (current_step, json.dumps(step_results), run_id),
-            )
-            await db.commit()
-        finally:
-            await db.close()
 
     async def _finish_run(
         self,
         run_id: str,
         status: str,
-        step_results: list[dict[str, Any]],
-        current_step: int = 0,
         output: Any = None,
         error: str | None = None,
+        cost_usd: float | None = None,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         db = await get_db()
         try:
             await db.execute(
-                "UPDATE runs SET status=?, current_step=?, step_results=?, output=?, error=?, finished_at=? WHERE id=?",
-                (status, current_step, json.dumps(step_results), json.dumps(output) if output else None, error, now, run_id),
+                "UPDATE runs SET status=?, output=?, error=?, cost_usd=?, finished_at=? WHERE id=?",
+                (
+                    status,
+                    json.dumps(output) if output else None,
+                    error,
+                    cost_usd,
+                    now,
+                    run_id,
+                ),
             )
             await db.commit()
         finally:
             await db.close()
 
-    @staticmethod
-    def _ensure_extraction_step(schema, output_schema: list[dict[str, Any]]) -> None:
-        from workflow_use.schema.views import PageExtractionStep
+        if status in ("passed", "failed"):
+            await self._send_data_target_notification(
+                run_id, status, output=output, error=error, cost_usd=cost_usd
+            )
 
-        if not output_schema:
-            return
-        steps = schema.steps
-        if steps and steps[-1].type in ("extract", "extract_page_content"):
-            return
-        field_names = [f["name"] for f in output_schema]
-        schema.steps.append(PageExtractionStep(
-            type="extract_page_content",
-            goal=f"Extract the following data: {', '.join(field_names)}",
-            description="Extract output data",
-        ))
-
-    @staticmethod
-    def _convert_extraction_steps(schema) -> None:
-        """Convert PageExtractionStep to ExtractStep so the semantic executor can handle them."""
-        from workflow_use.schema.views import ExtractStep, PageExtractionStep
-
-        for i, step in enumerate(schema.steps):
-            if isinstance(step, PageExtractionStep):
-                schema.steps[i] = ExtractStep(
-                    type="extract",
-                    extractionGoal=step.goal,
-                    description=getattr(step, "description", ""),
+    async def _send_data_target_notification(
+        self,
+        run_id: str,
+        status: str,
+        output: Any = None,
+        error: str | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
+        try:
+            # Look up the run's SOP to get data_target
+            run = await self.get_run(run_id)
+            if not run:
+                return
+            sop = await self.get_sop(run["sop_id"])
+            if not sop or not sop.get("data_target"):
+                return
+            dt = sop["data_target"]
+            if not dt.get("enabled"):
+                return
+            if dt.get("type") == "discord_webhook":
+                await self._send_discord_notification(
+                    sop_name=sop["name"],
+                    run_id=run_id,
+                    status=status,
+                    output=output,
+                    error=error,
+                    cost_usd=cost_usd,
                 )
+        except Exception:
+            pass  # never break run finalization
 
-    @staticmethod
-    def _build_output_model(output_schema: list[dict[str, Any]]) -> type | None:
-        if not output_schema:
-            return None
-        fields: dict[str, Any] = {}
-        type_map = {"string": str, "number": float, "integer": int, "boolean": bool}
-        for field in output_schema:
-            py_type = type_map.get(field.get("type", "string"), str)
-            fields[field["name"]] = (py_type, ...)
-        return create_model("DynamicOutput", **fields)
+    async def _send_discord_notification(
+        self,
+        sop_name: str,
+        run_id: str,
+        status: str,
+        output: Any = None,
+        error: str | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
+        url = config.DISCORD_WEBHOOK_URL
+        if not url:
+            return
+
+        color = 0x22C55E if status == "passed" else 0xEF4444
+        fields = [
+            {"name": "Run ID", "value": f"`{run_id}`", "inline": True},
+            {"name": "Status", "value": status.upper(), "inline": True},
+        ]
+        if cost_usd is not None:
+            fields.append({"name": "Cost", "value": f"${cost_usd:.4f}", "inline": True})
+        if output:
+            val = json.dumps(output, indent=2)
+            if len(val) > 1000:
+                val = val[:997] + "..."
+            fields.append({"name": "Output", "value": f"```json\n{val}\n```", "inline": False})
+        if error:
+            err_val = error if len(error) <= 1000 else error[:997] + "..."
+            fields.append({"name": "Error", "value": f"```\n{err_val}\n```", "inline": False})
+
+        payload = {
+            "embeds": [
+                {
+                    "title": f"Workflow Run — {sop_name}",
+                    "color": color,
+                    "fields": fields,
+                }
+            ]
+        }
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json=payload, timeout=10)
+
+
+def _parse_agent_output(
+    raw: str, output_schema: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Extract JSON from the agent's free-text output."""
+    if not output_schema:
+        return None
+
+    # Try fenced code block first
+    m = re.search(r"```json\s*\n(.*?)\n\s*```", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Try raw JSON object
+    m = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: extract values from prose using field names
+    result: dict[str, Any] = {}
+    for field in output_schema:
+        name = field["name"]
+        ftype = field.get("type", "string")
+        if ftype in ("number", "integer"):
+            # Look for patterns like "price is $99.00" or "price: 99"
+            pattern = rf'(?:{re.escape(name)}[^0-9$]*[\$]?\s*)([\d,]+\.?\d*)'
+            m = re.search(pattern, raw, re.IGNORECASE)
+            if not m:
+                # Try any dollar amount or number near the field context
+                m = re.search(r'\$\s*([\d,]+\.?\d*)', raw)
+            if m:
+                val = m.group(1).replace(",", "")
+                result[name] = int(val) if ftype == "integer" else float(val)
+        elif ftype == "boolean":
+            pattern = rf'{re.escape(name)}\s*[:=]?\s*(true|false|yes|no)'
+            m = re.search(pattern, raw, re.IGNORECASE)
+            if m:
+                result[name] = m.group(1).lower() in ("true", "yes")
+        else:
+            # String: look for "field: value" or "field is value"
+            pattern = rf'{re.escape(name)}\s*(?:is|:)\s*["\']?([^"\'\n,]+)'
+            m = re.search(pattern, raw, re.IGNORECASE)
+            if m:
+                result[name] = m.group(1).strip()
+
+    return result if result else None

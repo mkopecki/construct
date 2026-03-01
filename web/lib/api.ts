@@ -1,4 +1,4 @@
-import type { SOPSummary, SOPDetail, UpdateSOPRequest, RunSummary, RunDetail } from "./types";
+import type { SOPSummary, SOPDetail, UpdateSOPRequest, RunSummary, RunDetail, DataTarget } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -35,4 +35,10 @@ export const api = {
 
   cancelRun: (runId: string) =>
     apiFetch<{ ok: true }>(`/api/runs/${runId}/cancel`, { method: "POST" }),
+
+  setDataTarget: (sopId: string, dataTarget: DataTarget | null) =>
+    apiFetch<{ ok: true }>(`/api/sops/${sopId}/data-target`, {
+      method: "PUT",
+      body: JSON.stringify({ data_target: dataTarget }),
+    }),
 };

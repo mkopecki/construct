@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS sops (
     steps TEXT NOT NULL DEFAULT '[]',
     variables TEXT NOT NULL DEFAULT '[]',
     output_schema TEXT NOT NULL DEFAULT '[]',
-    workflow_json TEXT,
+    workspace_id TEXT,
+    workflow_md TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -28,6 +29,9 @@ CREATE TABLE IF NOT EXISTS runs (
     current_step INTEGER NOT NULL DEFAULT 0,
     total_steps INTEGER NOT NULL DEFAULT 0,
     step_results TEXT NOT NULL DEFAULT '[]',
+    session_id TEXT,
+    live_url TEXT,
+    cost_usd REAL,
     output TEXT,
     error TEXT,
     started_at TEXT,
@@ -50,6 +54,11 @@ async def init_db() -> None:
     conn = await get_db()
     try:
         await conn.executescript(_SCHEMA)
+        # Add data_target column (idempotent)
+        try:
+            await conn.execute("ALTER TABLE sops ADD COLUMN data_target TEXT")
+        except Exception:
+            pass  # column already exists
         await conn.commit()
     finally:
         await conn.close()
