@@ -85,11 +85,15 @@ class ConstructService:
     async def update_sop(self, sop_id: str, data: dict[str, Any]) -> bool:
         sets = []
         vals = []
+        workflow_fields = {"name", "description", "steps", "variables", "output_schema"}
+        changed_workflow_fields = set()
         for field in ("name", "description", "steps", "variables", "output_schema"):
             if field in data and data[field] is not None:
                 sets.append(f"{field}=?")
                 val = data[field]
                 vals.append(json.dumps(val) if isinstance(val, (list, dict)) else val)
+                if field in workflow_fields:
+                    changed_workflow_fields.add(field)
         if not sets:
             return True
         now = datetime.now(timezone.utc).isoformat()
@@ -102,9 +106,16 @@ class ConstructService:
                 f"UPDATE sops SET {', '.join(sets)} WHERE id=?", vals
             )
             await db.commit()
-            return cursor.rowcount > 0
+            if cursor.rowcount == 0:
+                return False
         finally:
             await db.close()
+
+        # Rebuild and re-upload workflow.md if any workflow-affecting field changed
+        if changed_workflow_fields:
+            await self._sync_workflow_md(sop_id)
+
+        return True
 
     async def delete_sop(self, sop_id: str) -> bool:
         db = await get_db()
@@ -129,6 +140,13 @@ class ConstructService:
         finally:
             await db.close()
 
+    async def get_live_workflow_md(self, sop_id: str) -> str | None:
+        """Fetch the current workflow.md content from the BU Cloud workspace."""
+        sop = await self.get_sop(sop_id)
+        if not sop or not sop.get("workspace_id"):
+            return None
+        return await self._bu.download_file(sop["workspace_id"], "workflow.md")
+
     # ---- Workflow Generation (SSE) ----
 
     async def generate_workflow_stream(self, sop_id: str) -> AsyncGenerator[str, None]:
@@ -144,13 +162,16 @@ class ConstructService:
                 start_url = ev.get("url", "")
                 break
 
-        yield sse_event("status", message="Creating cloud workspace...")
-
         try:
-            # 1. Create workspace
-            ws = await self._bu.create_workspace(sop["name"] or f"sop-{sop_id}")
-            workspace_id = ws["id"]
-            yield sse_event("status", message="Workspace created")
+            # 1. Reuse existing workspace or create a new one
+            workspace_id = sop.get("workspace_id")
+            if workspace_id:
+                yield sse_event("status", message="Reusing existing workspace...")
+            else:
+                yield sse_event("status", message="Creating cloud workspace...")
+                ws = await self._bu.create_workspace(sop["name"] or f"sop-{sop_id}")
+                workspace_id = ws["id"]
+                yield sse_event("status", message="Workspace created")
 
             # 2. Build workflow.md
             workflow_md = build_workflow_md(
@@ -163,7 +184,7 @@ class ConstructService:
             )
             yield sse_event("status", message="Workflow document built")
 
-            # 3. Upload workflow.md to workspace
+            # 3. Upload workflow.md — always overwrites the existing file
             await self._bu.upload_file(workspace_id, "workflow.md", workflow_md)
             yield sse_event("status", message="Uploaded workflow.md to workspace")
 
@@ -379,6 +400,42 @@ class ConstructService:
             return False
 
     # ---- Helpers ----
+
+    async def _sync_workflow_md(self, sop_id: str) -> None:
+        """Rebuild workflow.md from current SOP data and re-upload to workspace."""
+        sop = await self.get_sop(sop_id)
+        if not sop or not sop.get("workspace_id"):
+            return
+
+        start_url = ""
+        for ev in sop["recorded_events"]:
+            if ev.get("type") == "navigate":
+                start_url = ev.get("url", "")
+                break
+
+        workflow_md = build_workflow_md(
+            name=sop["name"],
+            description=sop["description"],
+            start_url=start_url,
+            steps=sop["steps"],
+            variables=sop["variables"],
+            output_schema=sop["output_schema"],
+        )
+
+        # Overwrite workflow.md in the workspace
+        await self._bu.upload_file(sop["workspace_id"], "workflow.md", workflow_md)
+
+        # Persist to DB
+        now = datetime.now(timezone.utc).isoformat()
+        db = await get_db()
+        try:
+            await db.execute(
+                "UPDATE sops SET workflow_md=?, updated_at=? WHERE id=?",
+                (workflow_md, now, sop_id),
+            )
+            await db.commit()
+        finally:
+            await db.close()
 
     async def _finish_run(
         self,

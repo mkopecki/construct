@@ -41,4 +41,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ data_target: dataTarget }),
     }),
+
+  getWorkflowMd: (sopId: string) =>
+    apiFetch<{ workflow_md: string }>(`/api/sops/${sopId}/workflow-md`),
 };

@@ -61,6 +61,14 @@ async def set_data_target(sop_id: str, req: SetDataTargetRequest):
     return {"ok": True}
 
 
+@router.get("/sops/{sop_id}/workflow-md")
+async def get_workflow_md(sop_id: str):
+    content = await service.get_live_workflow_md(sop_id)
+    if content is None:
+        raise HTTPException(404, "No workflow.md found")
+    return {"workflow_md": content}
+
+
 @router.post("/sops/{sop_id}/generate")
 async def generate_workflow(sop_id: str):
     return StreamingResponse(

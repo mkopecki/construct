@@ -5,7 +5,7 @@ Construct exposes an [MCP](https://modelcontextprotocol.io/) server so that chat
 ## Starting the server
 
 ```bash
-python -m server.mcp_server
+.venv/bin/python -m server.mcp_server
 ```
 
 Transport is **stdio** — the MCP client spawns the process and communicates over stdin/stdout.
@@ -20,11 +20,11 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "construct": {
-      "command": "python",
+      "command": "/path/to/construct/.venv/bin/python",
       "args": ["-m", "server.mcp_server"],
       "cwd": "/path/to/construct",
       "env": {
-        "OPENAI_API_KEY": "sk-..."
+        "BROWSER_USE_API_KEY": "..."
       }
     }
   }
@@ -39,11 +39,11 @@ Add to `.claude/settings.json` or project `.mcp.json`:
 {
   "mcpServers": {
     "construct": {
-      "command": "python",
+      "command": "/path/to/construct/.venv/bin/python",
       "args": ["-m", "server.mcp_server"],
       "cwd": "/path/to/construct",
       "env": {
-        "OPENAI_API_KEY": "sk-..."
+        "BROWSER_USE_API_KEY": "..."
       }
     }
   }
@@ -58,11 +58,11 @@ Add to `.cursor/mcp.json`:
 {
   "mcpServers": {
     "construct": {
-      "command": "python",
+      "command": "/path/to/construct/.venv/bin/python",
       "args": ["-m", "server.mcp_server"],
       "cwd": "/path/to/construct",
       "env": {
-        "OPENAI_API_KEY": "sk-..."
+        "BROWSER_USE_API_KEY": "..."
       }
     }
   }
@@ -73,8 +73,8 @@ Add to `.cursor/mcp.json`:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | Yes | — | OpenAI key for workflow generation and execution |
-| `OPENAI_MODEL` | No | `gpt-4o-mini` | Model used by workflow-use |
+| `BROWSER_USE_API_KEY` | Yes | — | Browser-use API key for workflow execution |
+| `BROWSER_USE_API_URL` | No | `https://api.browser-use.com` | Browser-use API endpoint |
 | `CONSTRUCT_DB` | No | `./data/construct.db` | Path to the SQLite database |
 
 The MCP server shares the same SQLite database as the FastAPI server (WAL mode handles concurrent access).

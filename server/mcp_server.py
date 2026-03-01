@@ -34,14 +34,25 @@ async def list_workflows() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def start_workflow(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Start a workflow by SOP name. Returns {run_id, status}."""
+    """Start a workflow by SOP name. Returns {run_id, status}.
+
+    If the response includes "notification": "discord", the user will receive
+    a Discord notification when the run finishes. Do NOT poll with
+    get_run_status/get_run_result — just tell the user the workflow is running
+    and they will be notified via Discord.
+    """
     sops = await service.list_sops()
     match = next((s for s in sops if s["name"] == name), None)
     if not match:
         return {"error": f"No workflow named '{name}'"}
     try:
         run_id = await service.start_run(match["id"], params or {})
-        return {"run_id": run_id, "status": "running"}
+        result: dict[str, Any] = {"run_id": run_id, "status": "running"}
+        sop = await service.get_sop(match["id"])
+        dt = sop.get("data_target") if sop else None
+        if dt and dt.get("enabled") and dt.get("type") == "discord_webhook":
+            result["notification"] = "discord"
+        return result
     except ValueError as e:
         return {"error": str(e)}
 

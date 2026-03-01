@@ -96,9 +96,10 @@ def build_run_task_prompt(
     lines += [
         "",
         "If any step fails because the site has changed (e.g., a selector or layout "
-        "is different), adapt to the new layout, complete the task, and then update "
-        "`workflow.md` in the workspace to reflect the changes. Add a line at the end "
-        "of your output: `_workflow_updated: true`.",
+        "is different), adapt to the new layout and complete the task. Then fully "
+        "overwrite `workflow.md` in the workspace with the corrected version — do NOT "
+        "append or patch, replace the entire file so it stays a single source of truth. "
+        "Add a line at the end of your output: `_workflow_updated: true`.",
     ]
 
     return "\n".join(lines)

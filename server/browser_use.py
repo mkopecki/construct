@@ -78,3 +78,28 @@ class BrowserUseClient:
             r = await c.put(f"/api/v3/sessions/{session_id}/stop")
             r.raise_for_status()
             return r.json()
+
+    async def list_workspace_files(self, workspace_id: str) -> list[dict[str, Any]]:
+        async with self._client() as c:
+            r = await c.get(
+                f"/api/v3/workspaces/{workspace_id}/files",
+                params={"limit": 100, "includeUrls": "true", "shallow": "true"},
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data.get("files", [])
+
+    async def download_file(self, workspace_id: str, filename: str) -> str | None:
+        """Download a file's content from a workspace by finding its signed URL."""
+        files = await self.list_workspace_files(workspace_id)
+        url = None
+        for f in files:
+            if f.get("path") == filename:
+                url = f.get("url")
+                break
+        if not url:
+            return None
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+            return r.text

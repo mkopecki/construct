@@ -4,7 +4,7 @@ import { use, useState, useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useSOP, useUpdateSOP, useDeleteSOP } from "@/lib/hooks";
 import { useQueryClient } from "@tanstack/react-query";
-import { streamGenerate, streamRun } from "@/lib/sse";
+import { streamGenerate } from "@/lib/sse";
 import { eventToStepDescription } from "@/lib/utils";
 import { formatDate } from "@/lib/utils";
 
@@ -23,23 +23,18 @@ import { RunHistoryTable } from "@/components/sop-detail/run-history-table";
 import { WizardSteps } from "@/components/sop-detail/wizard-steps";
 
 import { api } from "@/lib/api";
-import type { StepDef, Variable, OutputField, GenerationEvent, RunEvent, DataTargetType } from "@/lib/types";
+import type { StepDef, Variable, OutputField, GenerationEvent, DataTargetType } from "@/lib/types";
 import {
   ArrowLeft,
   ArrowRight,
   Sparkles,
   Trash2,
-  Play,
-  Square,
-  ExternalLink,
   CheckCircle2,
-  XCircle,
-  SkipForward,
   Bell,
   Loader2,
 } from "lucide-react";
 
-const WIZARD_STEPS = ["Define", "Verify", "Targets"];
+const WIZARD_STEPS = ["Define", "Targets"];
 
 export default function SOPPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -50,6 +45,7 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
   const deleteSOP = useDeleteSOP(id);
 
   const hasWorkflow = sop?.workspace_id != null;
+  const [wizardActive, setWizardActive] = useState(false);
 
   // Annotation state
   const [name, setName] = useState("");
@@ -66,17 +62,6 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
   const [genStatus, setGenStatus] = useState<string | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const [genDone, setGenDone] = useState(false);
-
-  // Verify run state
-  const [verifyRunning, setVerifyRunning] = useState(false);
-  const [verifyStatus, setVerifyStatus] = useState<string | null>(null);
-  const [verifyStepProgress, setVerifyStepProgress] = useState<{ current: number; total: number } | null>(null);
-  const [verifyOutput, setVerifyOutput] = useState<Record<string, unknown> | null>(null);
-  const [verifyError, setVerifyError] = useState<string | null>(null);
-  const [verifyLiveUrl, setVerifyLiveUrl] = useState<string | null>(null);
-  const [verifyDone, setVerifyDone] = useState(false);
-  const verifyRunIdRef = useState<string | null>(null);
-  const verifyAbortRef = useState<AbortController | null>(null);
 
   // Data target state
   const [selectedTarget, setSelectedTarget] = useState<DataTargetType | null>("discord_webhook");
@@ -113,6 +98,7 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
       output_schema: outputSchema,
     });
 
+    setWizardActive(true);
     setGenerating(true);
     setGenStatus("Initializing...");
     setGenError(null);
@@ -144,81 +130,14 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
     }
   }, [id, name, description, steps, variables, outputSchema, updateSOP, qc]);
 
-  // ── Step 2: Verify run ──
-  const handleVerifyRun = useCallback(async () => {
-    setVerifyRunning(true);
-    setVerifyStatus("Starting verification run...");
-    setVerifyStepProgress(null);
-    setVerifyOutput(null);
-    setVerifyError(null);
-    setVerifyLiveUrl(null);
-    setVerifyDone(false);
-
-    const ac = new AbortController();
-    verifyAbortRef[1](ac);
-
-    const params: Record<string, string> = {};
-    for (const v of variables) params[v.name] = v.example ?? "";
-
-    try {
-      await streamRun(id, params, (event: RunEvent) => {
-        switch (event.type) {
-          case "run_started":
-            verifyRunIdRef[1](event.run_id);
-            if (event.live_url) setVerifyLiveUrl(event.live_url);
-            setVerifyStatus("Session created");
-            break;
-          case "status":
-            setVerifyStatus(event.message);
-            break;
-          case "step_start":
-            setVerifyStepProgress({ current: event.step, total: event.total });
-            setVerifyStatus(`Running step ${event.step} of ${event.total}`);
-            break;
-          case "step_complete":
-            setVerifyStepProgress({ current: event.step, total: event.total });
-            break;
-          case "complete":
-            setVerifyOutput(event.output ?? null);
-            setVerifyStatus("Verification complete");
-            setVerifyDone(true);
-            break;
-          case "cancelled":
-            setVerifyStatus("Run cancelled");
-            break;
-          case "error":
-            setVerifyError(event.message);
-            break;
-        }
-      }, ac.signal);
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        setVerifyError((e as Error).message);
-      }
-    } finally {
-      setVerifyRunning(false);
-      verifyAbortRef[1](null);
-      qc.invalidateQueries({ queryKey: ["runs", { sopId: id }] });
-    }
-  }, [id, variables, qc, verifyAbortRef, verifyRunIdRef]);
-
-  const handleCancelVerify = useCallback(async () => {
-    const runId = verifyRunIdRef[0];
-    if (runId) {
-      try { await api.cancelRun(runId); } catch { verifyAbortRef[0]?.abort(); }
-    } else {
-      verifyAbortRef[0]?.abort();
-    }
-  }, [verifyRunIdRef, verifyAbortRef]);
-
-  // ── Step 3: Data targets ──
+  // ── Step 2: Data targets ──
   const handleDataTargetConfirm = useCallback(async () => {
     if (selectedTarget) {
       await api.setDataTarget(id, { type: selectedTarget, enabled: true });
     }
-    qc.invalidateQueries({ queryKey: ["sops", id] });
-    router.push(`/sops/${id}`);
-  }, [id, selectedTarget, qc, router]);
+    await qc.invalidateQueries({ queryKey: ["sops", id] });
+    setWizardActive(false);
+  }, [id, selectedTarget, qc]);
 
   const handleDelete = useCallback(async () => {
     await deleteSOP.mutateAsync();
@@ -242,8 +161,8 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
     );
   }
 
-  // ── Ready Mode (has workflow) ──
-  if (hasWorkflow) {
+  // ── Ready Mode (has workflow, not mid-wizard) ──
+  if (hasWorkflow && !wizardActive) {
     return <ReadyView sop={sop} sopId={id} onDelete={handleDelete} />;
   }
 
@@ -261,7 +180,7 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
       <div className="space-y-1">
         <h1 className="font-display text-3xl text-foreground/95">Set up workflow</h1>
         <p className="text-sm text-muted-foreground">
-          Define, verify, and configure your automation.
+          Define and configure your automation.
         </p>
       </div>
 
@@ -342,150 +261,8 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
         </div>
       )}
 
-      {/* ── Step 2: Verify ── */}
+      {/* ── Step 2: Data Targets ── */}
       {wizardStep === 1 && (
-        <div className="animate-in-up space-y-6">
-          <div className="rounded-xl border border-white/[0.06] bg-card p-6 space-y-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-medium text-foreground/90">Verification Run</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Run the workflow once to verify it works correctly.
-                </p>
-              </div>
-              {verifyLiveUrl && verifyRunning && (
-                <a
-                  href={verifyLiveUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs text-amber hover:text-amber/80 transition-colors"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  Watch live
-                </a>
-              )}
-            </div>
-
-            {!verifyRunning && !verifyDone && !verifyError && (
-              <Button
-                onClick={handleVerifyRun}
-                className="bg-secondary text-foreground hover:bg-secondary/80 border border-white/[0.06]"
-              >
-                <Play className="mr-2 h-4 w-4" />
-                Run verification
-              </Button>
-            )}
-
-            {verifyRunning && (
-              <div className="space-y-4">
-                {verifyStepProgress && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">{verifyStatus}</span>
-                      <span className="font-mono text-muted-foreground/70">
-                        {verifyStepProgress.current}/{verifyStepProgress.total}
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-amber progress-active transition-all duration-500"
-                        style={{ width: `${(verifyStepProgress.current / verifyStepProgress.total) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-                {!verifyStepProgress && (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin text-amber" />
-                    {verifyStatus}
-                  </div>
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCancelVerify}
-                  className="border-white/[0.06]"
-                >
-                  <Square className="mr-1.5 h-3 w-3" />
-                  Cancel
-                </Button>
-              </div>
-            )}
-
-            {verifyDone && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-emerald-400">
-                  <CheckCircle2 className="h-4 w-4" />
-                  Verification passed
-                </div>
-                {verifyOutput && Object.keys(verifyOutput).length > 0 && (
-                  <div className="rounded-lg bg-secondary/50 p-3">
-                    <p className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider mb-2">Output</p>
-                    <div className="space-y-1">
-                      {Object.entries(verifyOutput).map(([k, v]) => (
-                        <div key={k} className="flex gap-3 text-xs">
-                          <span className="font-mono text-muted-foreground min-w-[100px]">{k}</span>
-                          <span className="text-foreground/80">{typeof v === "object" ? JSON.stringify(v) : String(v ?? "")}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {verifyError && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 text-sm text-red-400">
-                  <XCircle className="h-4 w-4" />
-                  Verification failed
-                </div>
-                <p className="text-xs text-red-400/70">{verifyError}</p>
-                <Button
-                  onClick={handleVerifyRun}
-                  size="sm"
-                  className="bg-secondary text-foreground hover:bg-secondary/80 border border-white/[0.06]"
-                >
-                  <Play className="mr-1.5 h-3 w-3" />
-                  Retry
-                </Button>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between pt-2">
-            <Button
-              variant="ghost"
-              onClick={() => setWizardStep(0)}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back
-            </Button>
-            <div className="flex items-center gap-3">
-              <Button
-                variant="ghost"
-                onClick={() => setWizardStep(2)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <SkipForward className="mr-2 h-4 w-4" />
-                Skip
-              </Button>
-              <Button
-                onClick={() => setWizardStep(2)}
-                disabled={verifyRunning}
-                className="bg-amber text-amber-foreground hover:bg-amber/90 h-10 px-5"
-              >
-                Next
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Step 3: Data Targets ── */}
-      {wizardStep === 2 && (
         <div className="animate-in-up space-y-6">
           <div className="rounded-xl border border-white/[0.06] bg-card p-6 space-y-5">
             <div>
@@ -541,7 +318,7 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
           <div className="flex items-center justify-between pt-2">
             <Button
               variant="ghost"
-              onClick={() => setWizardStep(1)}
+              onClick={() => setWizardStep(0)}
               className="text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="mr-2 h-4 w-4" />
@@ -550,9 +327,9 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
             <div className="flex items-center gap-3">
               <Button
                 variant="ghost"
-                onClick={() => {
-                  qc.invalidateQueries({ queryKey: ["sops", id] });
-                  router.push(`/sops/${id}`);
+                onClick={async () => {
+                  await qc.invalidateQueries({ queryKey: ["sops", id] });
+                  setWizardActive(false);
                 }}
                 className="text-muted-foreground hover:text-foreground"
               >
@@ -608,6 +385,86 @@ const DATA_TARGET_OPTIONS: {
 
 // ── Ready View (active workflow) ──
 import type { SOPDetail } from "@/lib/types";
+import { FileText, RefreshCw, ChevronDown } from "lucide-react";
+
+function WorkflowMdViewer({ sopId }: { sopId: string }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const fetchWorkflow = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.getWorkflowMd(sopId);
+      setContent(res.workflow_md);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [sopId]);
+
+  useEffect(() => {
+    if (open && content === null && !loading) {
+      fetchWorkflow();
+    }
+  }, [open, content, loading, fetchWorkflow]);
+
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-card">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between p-5 text-left"
+      >
+        <div className="flex items-center gap-2.5">
+          <FileText className="h-4 w-4 text-muted-foreground/60" />
+          <h3 className="text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">
+            workflow.md
+          </h3>
+        </div>
+        <ChevronDown
+          className={`h-4 w-4 text-muted-foreground/40 transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+
+      {open && (
+        <div className="border-t border-white/[0.06] p-5 pt-4 space-y-3 animate-in-up">
+          <div className="flex justify-end">
+            <button
+              onClick={fetchWorkflow}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+          </div>
+
+          {error && (
+            <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+              <p className="text-xs text-red-400">{error}</p>
+            </div>
+          )}
+
+          {loading && !content && (
+            <div className="flex items-center gap-2 py-4 justify-center">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/40" />
+              <span className="text-xs text-muted-foreground/50">Loading...</span>
+            </div>
+          )}
+
+          {content && (
+            <pre className="rounded-lg bg-secondary/50 border border-white/[0.04] p-4 text-xs text-foreground/80 font-mono whitespace-pre-wrap overflow-x-auto max-h-[500px] overflow-y-auto leading-relaxed">
+              {content}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ReadyView({ sop, sopId, onDelete }: { sop: SOPDetail; sopId: string; onDelete: () => void }) {
   const router = useRouter();
@@ -681,6 +538,9 @@ function ReadyView({ sop, sopId, onDelete }: { sop: SOPDetail; sopId: string; on
           </div>
         </div>
       )}
+
+      {/* Workflow.md viewer */}
+      <WorkflowMdViewer sopId={sopId} />
 
       {/* Run section */}
       <div className="rounded-xl border border-white/[0.06] bg-card p-6">

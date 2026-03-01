@@ -21,10 +21,14 @@ export function eventToStepDescription(event: RecordedEvent): string {
   switch (event.type) {
     case "navigate":
       return `Navigate to ${event.url ?? "page"}`;
-    case "click":
-      return `Click on "${event.text || event.selector || "element"}"`;
-    case "input":
-      return `Type "${event.value ?? ""}" into ${event.selector || "field"}`;
+    case "click": {
+      const label = event.ariaLabel || event.text || event.role || event.tag || "element";
+      return `Click on "${label}"`;
+    }
+    case "input": {
+      const field = event.fieldLabel || event.selector || "field";
+      return `Type "${event.value ?? ""}" into ${field}`;
+    }
     case "key_press":
       return `Press ${event.key ?? "key"}`;
     case "select_change":
