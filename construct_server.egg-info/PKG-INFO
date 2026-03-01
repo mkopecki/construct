@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: construct-server
+Version: 0.1.0
+Summary: Construct automation server
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn[standard]>=0.32.0
+Requires-Dist: aiosqlite>=0.20.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: workflow-use
+Requires-Dist: browser-use
+Requires-Dist: openai>=1.0.0
+Requires-Dist: langchain-openai>=0.3.0
+Requires-Dist: playwright>=1.40.0
+Requires-Dist: fastmcp>=2.0.0
+Requires-Dist: pydantic>=2.0.0

@@ -1,0 +1,75 @@
+"use client";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Trash2, Plus } from "lucide-react";
+import type { OutputField } from "@/lib/types";
+
+interface OutputSchemaEditorProps {
+  fields: OutputField[];
+  onChange: (fields: OutputField[]) => void;
+}
+
+const TYPES: OutputField["type"][] = ["string", "number", "integer", "boolean"];
+
+export function OutputSchemaEditor({ fields, onChange }: OutputSchemaEditorProps) {
+  const update = (index: number, field: keyof OutputField, value: string) => {
+    const next = [...fields];
+    next[index] = { ...next[index], [field]: value } as OutputField;
+    onChange(next);
+  };
+
+  const remove = (index: number) => {
+    onChange(fields.filter((_, i) => i !== index));
+  };
+
+  const add = () => {
+    onChange([...fields, { name: "", type: "string", example: "" }]);
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="text-sm font-medium">Output Schema</label>
+      {fields.length > 0 && (
+        <div className="grid grid-cols-[1fr_120px_1fr_40px] gap-2 text-xs text-muted-foreground">
+          <span>Field name</span>
+          <span>Type</span>
+          <span>Example</span>
+          <span />
+        </div>
+      )}
+      {fields.map((f, i) => (
+        <div key={i} className="grid grid-cols-[1fr_120px_1fr_40px] gap-2">
+          <Input
+            value={f.name}
+            onChange={(e) => update(i, "name", e.target.value)}
+            placeholder="field_name"
+          />
+          <select
+            value={f.type}
+            onChange={(e) => update(i, "type", e.target.value)}
+            className="rounded-md border bg-background px-3 py-2 text-sm"
+          >
+            {TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <Input
+            value={f.example}
+            onChange={(e) => update(i, "example", e.target.value)}
+            placeholder="example value"
+          />
+          <Button variant="ghost" size="icon" onClick={() => remove(i)}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      ))}
+      <Button variant="outline" size="sm" onClick={add}>
+        <Plus className="mr-1 h-4 w-4" />
+        Add field
+      </Button>
+    </div>
+  );
+}

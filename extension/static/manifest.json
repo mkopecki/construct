@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Construct Recorder",
+  "version": "0.1.0",
+  "description": "Records browser actions for Construct",
+  "permissions": ["activeTab", "tabs", "webNavigation", "storage", "scripting"],
+  "host_permissions": ["http://localhost:8000/*"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
