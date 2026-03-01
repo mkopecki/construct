@@ -44,8 +44,7 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
   const updateSOP = useUpdateSOP(id);
   const deleteSOP = useDeleteSOP(id);
 
-  const hasWorkflow = sop?.workspace_id != null;
-  const [wizardActive, setWizardActive] = useState(false);
+  const [wizardDone, setWizardDone] = useState<boolean | null>(null);
 
   // Annotation state
   const [name, setName] = useState("");
@@ -65,6 +64,8 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
 
   // Data target state
   const [selectedTarget, setSelectedTarget] = useState<DataTargetType | null>("discord_webhook");
+  const [finishing, setFinishing] = useState(false);
+  const [finishError, setFinishError] = useState<string | null>(null);
 
   // Seed form from SOP data
   const seeded = useMemo(() => sop?.id, [sop?.id]);
@@ -85,6 +86,11 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
         }))
       );
     }
+
+    // Only set once on initial load — if SOP already has a workflow, wizard is done
+    if (wizardDone === null) {
+      setWizardDone(sop.workspace_id != null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seeded]);
 
@@ -98,7 +104,7 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
       output_schema: outputSchema,
     });
 
-    setWizardActive(true);
+    setWizardDone(false);
     setGenerating(true);
     setGenStatus("Initializing...");
     setGenError(null);
@@ -132,11 +138,19 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
 
   // ── Step 2: Data targets ──
   const handleDataTargetConfirm = useCallback(async () => {
-    if (selectedTarget) {
-      await api.setDataTarget(id, { type: selectedTarget, enabled: true });
+    setFinishing(true);
+    setFinishError(null);
+    try {
+      if (selectedTarget) {
+        await api.setDataTarget(id, { type: selectedTarget, enabled: true });
+      }
+      await qc.invalidateQueries({ queryKey: ["sops", id] });
+      setWizardDone(true);
+    } catch (e) {
+      setFinishError((e as Error).message);
+    } finally {
+      setFinishing(false);
     }
-    await qc.invalidateQueries({ queryKey: ["sops", id] });
-    setWizardActive(false);
   }, [id, selectedTarget, qc]);
 
   const handleDelete = useCallback(async () => {
@@ -162,7 +176,7 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
   }
 
   // ── Ready Mode (has workflow, not mid-wizard) ──
-  if (hasWorkflow && !wizardActive) {
+  if (wizardDone) {
     return <ReadyView sop={sop} sopId={id} onDelete={handleDelete} />;
   }
 
@@ -327,9 +341,10 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
             <div className="flex items-center gap-3">
               <Button
                 variant="ghost"
+                disabled={finishing}
                 onClick={async () => {
                   await qc.invalidateQueries({ queryKey: ["sops", id] });
-                  setWizardActive(false);
+                  setWizardDone(true);
                 }}
                 className="text-muted-foreground hover:text-foreground"
               >
@@ -337,13 +352,24 @@ export default function SOPPage({ params }: { params: Promise<{ id: string }> })
               </Button>
               <Button
                 onClick={handleDataTargetConfirm}
+                disabled={finishing}
                 className="bg-amber text-amber-foreground hover:bg-amber/90 h-10 px-5"
               >
-                <CheckCircle2 className="mr-2 h-4 w-4" />
-                Finish Setup
+                {finishing ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                )}
+                {finishing ? "Saving..." : "Finish Setup"}
               </Button>
             </div>
           </div>
+
+          {finishError && (
+            <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4">
+              <p className="text-sm text-red-400">{finishError}</p>
+            </div>
+          )}
         </div>
       )}
     </div>

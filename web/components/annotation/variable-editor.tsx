@@ -27,7 +27,7 @@ export function VariableEditor({ variables, onChange }: VariableEditorProps) {
 
   return (
     <div className="space-y-3">
-      <label className="text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">Variables</label>
+      <label className="block text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">Variables</label>
       {variables.length > 0 && (
         <div className="grid grid-cols-[1fr_1fr_1fr_36px] gap-2 text-[10px] font-mono text-muted-foreground/30 uppercase tracking-wider">
           <span>Name</span>

@@ -29,7 +29,7 @@ export function OutputSchemaEditor({ fields, onChange }: OutputSchemaEditorProps
 
   return (
     <div className="space-y-3">
-      <label className="text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">Output Schema</label>
+      <label className="block text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">Output Schema</label>
       {fields.length > 0 && (
         <div className="grid grid-cols-[1fr_100px_1fr_36px] gap-2 text-[10px] font-mono text-muted-foreground/30 uppercase tracking-wider">
           <span>Field name</span>

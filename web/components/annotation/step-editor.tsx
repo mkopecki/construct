@@ -39,7 +39,7 @@ export function StepEditor({ steps, onChange }: StepEditorProps) {
 
   return (
     <div className="space-y-3">
-      <label className="text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">Steps</label>
+      <label className="block text-[11px] font-mono text-muted-foreground/50 uppercase tracking-wider">Steps</label>
       {steps.map((step, i) => (
         <div key={step.id} className="group flex items-center gap-2">
           <button
